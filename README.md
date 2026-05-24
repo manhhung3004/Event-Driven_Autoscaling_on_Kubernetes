@@ -1,111 +1,117 @@
-# Services-Mesh-Event-Driven-Scaling
+## Event-Driven Autoscaling on Kubernetes — Tóm tắt
 
-## Phase 1: Setup and Install Istio with Sidecar Mode
+Repo này minh họa một môi trường trên máy local (Kind) để demo autoscaling dựa trên sự kiện, kết hợp:
 
-### Prerequisites
+- Service mesh: Istio
+- Serverless: Knative Serving (hoặc Kourier)
+- Event-driven autoscaling: KEDA
+- Message broker: RabbitMQ (Bitnami Helm chart)
+- Giám sát: Prometheus + Grafana
+
+README này được chỉnh cho đúng cấu trúc của repository và thêm hướng dẫn build/deploy `web-demo` (ứng dụng demo).
+
+**Yêu cầu (local)**
 
 - Docker
+- kind (v0.20+)
 - kubectl
-- KinD
-- Helm 3.x
+- helm 3
+- istioctl (nếu bạn muốn dùng Istio demo profile; các script có thể tự tải nếu chưa có)
 
-### Installation Steps
+**Cấu trúc chính**
 
-#### 1. Create KinD Cluster
+- `scripts/` — helper scripts để tạo Kind và cài component (`create-cluster.sh`, `install-components.sh`, ...)
+- `k8s/` — cấu hình Helm values và cấu hình cluster-level dùng bởi các script cài đặt
+- `web-demo/` — ứng dụng demo (API, worker, exporter) cùng manifests trong `web-demo/k8s/`
+- `docker/` — docker-compose cho RabbitMQ (tùy chọn, local)
 
-```yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-  - role: control-plane
-  - role: worker
-  - role: worker
-networking:
-  disableDefaultCNI: true
-  podSubnet: "10.244.0.0/16"
-```
+## Nhanh: tạo cluster và cài component (tự động)
+
+1. Cho phép thực thi script và tạo cluster:
 
 ```bash
-kind create cluster --config kind-config.yaml --name istio-cluster
+chmod +x scripts/*.sh
+./scripts/create-cluster.sh
 ```
 
-#### 2. Install Flannel CNI
+2. Cài các component chính (Istio, Knative, KEDA, RabbitMQ, Prometheus/Grafana):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+./scripts/install-components.sh
 ```
 
-#### 3. Setup Helm for Istio
+Ghi chú: các script đã chứa các lệnh `helm` và `kubectl apply`. Nếu bạn thích cài thủ công, xem phần tiếp theo.
+
+## Build ảnh Docker cho `web-demo`
+
+Các image mặc định được tham chiếu trong manifests là:
+
+- `mahhhuhh/event-demo-api:1.0.0`
+- `mahhhuhh/event-demo-worker:1.0.0`
+- `mahhhuhh/rabbitmq-exporter:1.0.0`
+
+Build và (tùy chọn) load vào Kind:
 
 ```bash
-helm repo add istio https://istio-release.storage.googleapis.com/charts
-helm repo update
+docker build -t mahhhuhh/event-demo-api:1.0.0 -f web-demo/api/Dockerfile web-demo/api
+docker build -t mahhhuhh/event-demo-worker:1.0.0 -f web-demo/worker/Dockerfile web-demo/worker
+docker build -t mahhhuhh/rabbitmq-exporter:1.0.0 -f web-demo/exporter/Dockerfile web-demo/exporter
+
+# Nếu dùng kind, load ảnh vào cluster
+kind load docker-image mahhhuhh/event-demo-api:1.0.0 --name eda-cluster
+kind load docker-image mahhhuhh/event-demo-worker:1.0.0 --name eda-cluster
+kind load docker-image mahhhuhh/rabbitmq-exporter:1.0.0 --name eda-cluster
 ```
 
-#### 4. Install Istio Components
+## Triển khai `web-demo` lên cluster
+
+1. Tạo namespace demo:
 
 ```bash
-# Install base
-helm install istio-base istio/base \
-  -n istio-system \
-  --set defaultRevision=default \
-  --create-namespace
-
-# Install control plane
-helm install istiod istio/istiod \
-  -n istio-system \
-  --wait
-
-# Install ingress gateway
-kubectl create namespace istio-ingress
-helm install istio-ingress istio/gateway \
-  -n istio-ingress \
-  --wait
+kubectl apply -f web-demo/k8s/namespace.yaml
 ```
 
-#### 5. Enable Sidecar Injection
+2. Triển khai ứng dụng và exporter:
 
 ```bash
-kubectl label namespace default istio-injection=enabled
+kubectl apply -f web-demo/k8s/applications/
+kubectl apply -f web-demo/k8s/exporter/
 ```
 
-#### 6. Deploy Sample App
+3. Triển khai KEDA ScaledObject (điều chỉnh `web-demo/k8s/keda-scaledobject.yaml` nếu cần):
 
 ```bash
-kubectl create namespace sample-app
-kubectl label namespace sample-app istio-injection=enabled
-kubectl apply -f sample-app.yaml -n sample-app
+kubectl apply -f web-demo/k8s/keda-scaledobject.yaml
 ```
 
-#### 7. Verify Installation
+## Kiểm tra
+
+- Xem pods: `kubectl get pods -n demo`
+- Xem Knative services: `kubectl get ksvc -n demo`
+- Xem ScaledObjects: `kubectl get scaledobjects.keda.sh -n demo`
+- Exporter metrics: `kubectl port-forward svc/rabbitmq-exporter -n demo 8000:8000` và truy cập `http://localhost:8000/metrics`
+- Grafana: `kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80`
+
+## Tùy chọn: chạy RabbitMQ bằng docker-compose (tại local)
 
 ```bash
-kubectl get pods -n istio-system
-kubectl get pods -n sample-app
-kubectl describe pod <pod-name> -n sample-app
+docker compose -f docker/docker-compose.rabbit-management.yml up -d
 ```
 
-Check for `istio-proxy` container in pods.
+Sau đó chỉnh `web-demo/k8s/keda-scaledobject.yaml` hoặc các `ConfigMap`/`Secret` để trỏ đến host/credentials phù hợp.
 
-### Useful Commands
+## Gợi ý dùng API demo
 
-```bash
-# Check Istio status
-kubectl get ns istio-system
-kubectl get pods -n istio-system
+- API (FastAPI) cung cấp endpoint `POST /jobs` để đẩy message vào queue. Nếu chạy trong cluster, dùng Knative URL hoặc port-forward service.
+- Worker tiêu thụ message và xuất metrics Prometheus (port mặc định `8001` trong container).
 
-# View namespace labels
-kubectl get namespace --show-labels
+## Lưu ý và sửa lỗi nhỏ đã bắt gặp
 
-# Check sidecar injection
-kubectl describe pod <pod-name> -n <namespace>
+- Thư mục script trong repo là `scripts/` (không phải `script/`) — các tham chiếu đã được cập nhật trong README.
+- Manifests demo nằm trong `web-demo/k8s/` và sử dụng image tag `mahhhuhh/*:1.0.0` theo mặc định.
 
-# View logs
-kubectl logs -n istio-system -l app=istiod
-```
+## Muốn mình làm tiếp?
 
-### References
+- Mình có thể: thêm script build&deploy tự động, đổi thành Helm chart cho `web-demo`, hoặc viết demo producer/consumer để dễ test (bạn chọn).
 
-- [Istio Documentation](https://istio.io/latest/docs/)
-- [KinD Documentation](https://kind.sigs.k8s.io/)
+---

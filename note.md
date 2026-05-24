@@ -9,7 +9,6 @@ kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Doc
 
 kubectl taint nodes --all node-role.kubernetes.io/control-plane- 
 
-
 ## install on master, worker
 mkdir -p /opt/cni/bin
 
@@ -47,3 +46,21 @@ istioctl install --set components.ingressGateways[0].name=istio-ingressgateway \
 --set components.ingressGateways[0].enabled=true -y
 
 ## install metrics kube metrics server
+
+
+
+curl -v -H "Host: api.demo.svc.cluster.local" http://localhost:37391/health
+
+
+
+while true; do
+  curl -X POST http://api.demo.svc.cluster.local/
+  echo ""
+  sleep 2
+done
+
+while true; do
+  curl -X POST http://api.demo.svc.cluster.local/jobs
+  echo ""
+  sleep 2
+done

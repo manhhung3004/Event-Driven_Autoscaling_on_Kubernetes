@@ -1,0 +1,20 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: api
+  namespace: demo
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+    spec:
+      containers:
+        - image: mahhhuhh/event-demo-api:1.0.0
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: rabbitmq-secret

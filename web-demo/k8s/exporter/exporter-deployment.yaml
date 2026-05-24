@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq-exporter
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq-exporter
+  template:
+    metadata:
+      labels:
+        app: rabbitmq-exporter
+    spec:
+      containers:
+        - name: rabbitmq-exporter
+          image: mahhhuhh/rabbitmq-exporter:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: rabbitmq-secret
